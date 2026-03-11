@@ -109,26 +109,27 @@ void main() {
   float NdotV = max(dot(N, V), 0.001);
 
   // ── Organic thickness variation (simulates natural aragonite platelet layout) ──
-  float nv  = fbm(vUv * 6.0 + uTime * 0.015);
-  float baseD = 400.0;  // nm — typical nacre platelet thickness
-  float varD  = 90.0 * nv
-              + 35.0 * sin(vUv.x * 22.0 + uTime * 0.10)
-              + 25.0 * cos(vUv.y * 17.0 - uTime * 0.08);
+  float nv  = fbm(vUv * 8.0 + uTime * 0.02);
+  float baseD = 380.0;  // nm — typical nacre platelet thickness
+  float varD  = 130.0 * nv
+              + 55.0 * sin(vUv.x * 18.0 + uTime * 0.12)
+              + 45.0 * cos(vUv.y * 14.0 - uTime * 0.09)
+              + 30.0 * sin(vUv.x * 7.0 + vUv.y * 9.0 + uTime * 0.06);
 
   // ── Multi-layer thin-film iridescence ──
-  //    5 stacked aragonite layers × 10 spectral samples
+  //    7 stacked aragonite layers × 16 spectral samples for richer color
   vec3 iri = vec3(0.0);
-  for (int layer = 0; layer < 5; layer++) {
-    float d  = baseD + varD + float(layer) * 42.0;
+  for (int layer = 0; layer < 7; layer++) {
+    float d  = baseD + varD + float(layer) * 38.0;
     vec3  lc = vec3(0.0);
-    for (int w = 0; w < 10; w++) {
-      float lam = 400.0 + float(w) * 33.33;  // 400 → 700 nm
+    for (int w = 0; w < 16; w++) {
+      float lam = 380.0 + float(w) * 21.25;  // 380 → 720 nm
       lc += wavelengthToRGB(lam) * thinFilmR(lam, NdotV, d, 1.0, 1.58);
     }
-    float attenuation = 1.0 - float(layer) * 0.10;
-    iri += lc * attenuation / 10.0;
+    float attenuation = 1.0 - float(layer) * 0.08;
+    iri += lc * attenuation / 16.0;
   }
-  iri /= 5.0;
+  iri /= 7.0;
 
   // ── Warm nacre base ──
   vec3 warmBase = mix(
@@ -161,7 +162,7 @@ void main() {
   col += warmBase * diff * 0.22;
 
   // Iridescence (boosted at grazing angles, like real nacre)
-  col += iri * (0.55 + fres * 0.45) * 1.9;
+  col += iri * (0.65 + fres * 0.55) * 3.2;
 
   // Specular
   col += vec3(1.00, 0.98, 0.95) * s1 * 0.85;
@@ -174,7 +175,7 @@ void main() {
     vec3(1.0, 0.90, 0.95),
     sin(vUv.x * 8.0) * 0.5 + 0.5
   );
-  col += rim * fres * 0.20;
+  col += rim * fres * 0.35;
 
   // Translucency
   col += vec3(1.0, 0.92, 0.87) * trans;
@@ -212,8 +213,8 @@ const camera = new THREE.PerspectiveCamera(
   100,
 );
 
-// Smooth torus-knot — the curvature variation shows off the iridescence
-const geometry = new THREE.TorusKnotGeometry(1, 0.38, 256, 64);
+// Large plane — focus is entirely on the material surface
+const geometry = new THREE.PlaneGeometry(5, 5, 1, 1);
 const material = new THREE.ShaderMaterial({
   vertexShader,
   fragmentShader,
@@ -223,15 +224,16 @@ const material = new THREE.ShaderMaterial({
 });
 
 const mesh = new THREE.Mesh(geometry, material);
+mesh.rotation.x = -Math.PI * 0.15; // tilt slightly toward camera
 scene.add(mesh);
 
 // ═══════════════════════════════════════════════════════════════
 // Camera Orbit
 // ═══════════════════════════════════════════════════════════════
 
-const RADIUS = 3.8;
-const orbit  = { theta: 0, phi: Math.PI / 2 };
-const target = { theta: 0, phi: Math.PI / 2 };
+const RADIUS = 3.2;
+const orbit  = { theta: 0, phi: Math.PI * 0.38 };
+const target = { theta: 0, phi: Math.PI * 0.38 };
 
 function syncCamera() {
   camera.position.set(
@@ -251,8 +253,8 @@ let useGyro = false;
 
 window.addEventListener('mousemove', (e) => {
   if (useGyro) return;
-  target.theta = ((e.clientX / window.innerWidth)  - 0.5) * Math.PI * 1.2;
-  target.phi   = 0.4 + (e.clientY / window.innerHeight) * (Math.PI - 0.8);
+  target.theta = ((e.clientX / window.innerWidth)  - 0.5) * Math.PI * 0.6;
+  target.phi   = 0.25 + (e.clientY / window.innerHeight) * (Math.PI * 0.5);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -335,9 +337,6 @@ function animate() {
   orbit.theta += (target.theta - orbit.theta) * 0.06;
   orbit.phi   += (target.phi   - orbit.phi)   * 0.06;
   syncCamera();
-
-  // Gentle idle rotation so the nacre shimmers even without input
-  mesh.rotation.y += 0.0012;
 
   renderer.render(scene, camera);
 }
