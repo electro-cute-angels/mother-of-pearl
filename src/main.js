@@ -375,8 +375,8 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
 
-  const t  = clock.getElapsedTime();
   const dt = Math.min(clock.getDelta(), 0.05); // cap large spikes
+  const t  = clock.elapsedTime;
   material.uniforms.uTime.value = t;
 
   // Smooth lerp toward target tilt
