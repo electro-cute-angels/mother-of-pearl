@@ -228,23 +228,18 @@ const camera = new THREE.PerspectiveCamera(
   100,
 );
 
-// Fixed camera
-camera.position.set(0, 0, 3.2);
+// Fixed camera — pulled back to see the full pendulum
+camera.position.set(0, 0, 5.5);
 camera.lookAt(0, 0, 0);
 
 // ═══════════════════════════════════════════════════════════════
-// Frame of nacre tiles — each screwed at the top
+// Triple inverted pendulum with nacre shader
 // ═══════════════════════════════════════════════════════════════
 
-const TILE_W = 0.26;
-const TILE_H = 0.40;
-const GAP    = 0.035;
+const SEG_W = 0.30;
+const SEG_LENGTHS = [1.2, 1.0, 0.8]; // bottom, middle, top
+const SEG_DEPTH   = 0.12;
 
-// Geometry with pivot at top-center so tiles hang from their screw
-const tileGeo = new THREE.PlaneGeometry(TILE_W, TILE_H);
-tileGeo.translate(0, -TILE_H / 2, 0);
-
-// Shared material
 const material = new THREE.ShaderMaterial({
   vertexShader,
   fragmentShader,
@@ -255,60 +250,57 @@ const material = new THREE.ShaderMaterial({
   side: THREE.DoubleSide,
 });
 
-const tiles = [];
+// Each segment: pivot at bottom-center, geometry extends upward
+const segments = [];  // { pivot, angle, angVel }
+let parentGroup = scene;
 
-function addTile(x, y, phase) {
+for (let i = 0; i < 3; i++) {
+  const h = SEG_LENGTHS[i];
+  const geo = new THREE.BoxGeometry(SEG_W, h, SEG_DEPTH, 4, 16, 4);
+  geo.translate(0, h / 2, 0);  // pivot at bottom
+
+  const mesh = new THREE.Mesh(geo, material);
+
   const pivot = new THREE.Group();
-  const mesh  = new THREE.Mesh(tileGeo, material);
   pivot.add(mesh);
-  pivot.position.set(x, y, 0);
-  pivot.userData.phase = phase;
-  scene.add(pivot);
-  tiles.push(pivot);
+
+  if (i === 0) {
+    // Base of pendulum at bottom of screen
+    pivot.position.set(0, -1.4, 0);
+    scene.add(pivot);
+  } else {
+    // Attach at the top of the previous segment
+    pivot.position.set(0, SEG_LENGTHS[i - 1], 0);
+    segments[i - 1].pivot.children[0].add(pivot);
+  }
+
+  segments.push({ pivot, angle: 0, angVel: 0, length: h });
+  parentGroup = pivot;
 }
 
-function getVisibleSize() {
-  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
-  const h = 2 * camera.position.z * Math.tan(halfFov);
-  return { w: h * camera.aspect, h };
+// ── Add a small sphere at each joint (the "screw") ──
+const jointGeo = new THREE.SphereGeometry(0.06, 16, 16);
+const jointMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
+
+// Base joint
+const baseJoint = new THREE.Mesh(jointGeo, jointMat);
+baseJoint.position.set(0, -1.4, 0);
+scene.add(baseJoint);
+
+// Joints between segments
+for (let i = 0; i < 2; i++) {
+  const joint = new THREE.Mesh(jointGeo, jointMat);
+  joint.position.set(0, SEG_LENGTHS[i], 0);
+  segments[i].pivot.children[0].add(joint);
 }
 
-function buildFrame() {
-  // Remove old tiles
-  tiles.forEach(t => scene.remove(t));
-  tiles.length = 0;
+// ═══════════════════════════════════════════════════════════════
+// Pendulum physics
+// ═══════════════════════════════════════════════════════════════
 
-  const vis = getVisibleSize();
-  const pad = 0.06; // margin from screen edge
-
-  const left   = -vis.w / 2 + pad + TILE_W / 2;
-  const right  =  vis.w / 2 - pad - TILE_W / 2;
-  const top    =  vis.h / 2 - pad;
-  const bottom = -vis.h / 2 + pad + TILE_H;
-
-  const stepX = TILE_W + GAP;
-  const stepY = TILE_H + GAP;
-  let idx = 0;
-
-  // ── Top row ──
-  const nTop = Math.max(1, Math.floor((right - left) / stepX) + 1);
-  const topOff = (nTop - 1) * stepX / 2;
-  for (let i = 0; i < nTop; i++) addTile(-topOff + i * stepX, top, idx++ * 0.37);
-
-  // ── Bottom row ──
-  for (let i = 0; i < nTop; i++) addTile(-topOff + i * stepX, bottom, idx++ * 0.37);
-
-  // ── Left column (between top & bottom rows) ──
-  const colTop = top - stepY;
-  const colBot = bottom + GAP;
-  const nCol = Math.max(0, Math.floor((colTop - colBot) / stepY) + 1);
-  for (let i = 0; i < nCol; i++) addTile(left, colTop - i * stepY, idx++ * 0.37);
-
-  // ── Right column ──
-  for (let i = 0; i < nCol; i++) addTile(right, colTop - i * stepY, idx++ * 0.37);
-}
-
-buildFrame();
+const GRAVITY   = 4.0;
+const DAMPING   = 0.985;
+const STIFFNESS = 2.5;  // restoring spring toward upright
 
 // ═══════════════════════════════════════════════════════════════
 // Tilt state — drives the shader uTilt uniform
@@ -372,7 +364,6 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  buildFrame();
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -384,7 +375,8 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
 
-  const t = clock.getElapsedTime();
+  const t  = clock.getElapsedTime();
+  const dt = Math.min(clock.getDelta(), 0.05); // cap large spikes
   material.uniforms.uTime.value = t;
 
   // Smooth lerp toward target tilt
@@ -392,12 +384,25 @@ function animate() {
   tilt.y += (tiltTarget.y - tilt.y) * 0.08;
   material.uniforms.uTilt.value.set(tilt.x, tilt.y);
 
-  // Swing each tile from its screw point — gentle pendulum
-  for (let i = 0; i < tiles.length; i++) {
-    const p = tiles[i].userData.phase;
-    const swing = Math.sin(t * 1.8 + p) * 0.015;
-    tiles[i].rotation.z = tilt.x * 0.12 + swing;
-    tiles[i].rotation.x = tilt.y * 0.08 + Math.sin(t * 1.4 + p * 1.3) * 0.008;
+  // ── Pendulum physics (simple Euler per segment) ──
+  // Tilt acts as an external force (like tilting the base)
+  const force = tilt.x * 3.0;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    // Cascade: each segment feels more instability from segments below
+    const cascade = (i + 1) * 1.5;
+    const accel =
+      -GRAVITY * Math.sin(seg.angle) * cascade +  // gravity
+      -STIFFNESS * seg.angle +                     // restoring spring
+       force * cascade * 0.35;                     // gyroscope / mouse
+
+    seg.angVel += accel * dt;
+    seg.angVel *= DAMPING;
+    seg.angle  += seg.angVel * dt;
+    seg.angle   = THREE.MathUtils.clamp(seg.angle, -0.7, 0.7);
+
+    seg.pivot.rotation.z = seg.angle;
   }
 
   renderer.render(scene, camera);
