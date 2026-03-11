@@ -1,0 +1,346 @@
+import * as THREE from 'three';
+import './style.css';
+
+// ═══════════════════════════════════════════════════════════════
+// GLSL — Vertex Shader
+// ═══════════════════════════════════════════════════════════════
+
+const vertexShader = /* glsl */ `
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  vec4 worldPos = modelMatrix * vec4(position, 1.0);
+  vWorldPos = worldPos.xyz;
+  // World-space normal (safe for uniform scale / rotation only)
+  vNormal = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * worldPos;
+}
+`;
+
+// ═══════════════════════════════════════════════════════════════
+// GLSL — Fragment Shader  (thin-film interference nacre)
+// ═══════════════════════════════════════════════════════════════
+
+const fragmentShader = /* glsl */ `
+varying vec3 vNormal;
+varying vec3 vWorldPos;
+varying vec2 vUv;
+
+uniform float uTime;
+
+/* ── Procedural noise (gradient-value hybrid) ── */
+
+vec2 hash2(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)),
+           dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453);
+}
+
+float vnoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = dot(hash2(i),               f);
+  float b = dot(hash2(i + vec2(1, 0)),   f - vec2(1, 0));
+  float c = dot(hash2(i + vec2(0, 1)),   f - vec2(0, 1));
+  float d = dot(hash2(i + vec2(1, 1)),   f - vec2(1, 1));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) + 0.5;
+}
+
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  mat2 rot = mat2(cos(0.5), sin(0.5), -sin(0.5), cos(0.5));
+  for (int i = 0; i < 5; i++) {
+    v += a * vnoise(p);
+    p  = rot * p * 2.0;
+    a *= 0.5;
+  }
+  return v;
+}
+
+/* ── Wavelength (nm) → approximate sRGB ── */
+
+vec3 wavelengthToRGB(float l) {
+  vec3 c;
+  if      (l < 410.0) { float t = (l - 380.0) / 30.0;                    c = vec3(0.33 * t,        0.0,            t); }
+  else if (l < 460.0) { float t = (l - 410.0) / 50.0;                    c = vec3(0.33 * (1.0-t),  0.0,            1.0); }
+  else if (l < 490.0) { float t = (l - 460.0) / 30.0;                    c = vec3(0.0,             t,              1.0); }
+  else if (l < 510.0) { float t = (l - 490.0) / 20.0;                    c = vec3(0.0,             1.0,            1.0 - t); }
+  else if (l < 580.0) { float t = (l - 510.0) / 70.0;                    c = vec3(t,               1.0,            0.0); }
+  else if (l < 640.0) { float t = (l - 580.0) / 60.0;                    c = vec3(1.0,             1.0 - t,        0.0); }
+  else                 { float t = clamp((l - 640.0) / 60.0, 0.0, 1.0);  c = vec3(1.0 - 0.5 * t,  0.0,            0.0); }
+
+  // Fade at the edges of the visible spectrum
+  float edge = 1.0;
+  if      (l < 420.0) edge = 0.3 + 0.7 * (l - 380.0) / 40.0;
+  else if (l > 680.0) edge = 0.3 + 0.7 * (720.0 - l) / 40.0;
+  return c * edge;
+}
+
+/* ── Thin-film interference — Airy reflectance ── */
+
+float thinFilmR(float lambda, float cosI, float d, float n0, float n1) {
+  // Snell's law
+  float sinI = sqrt(max(1.0 - cosI * cosI, 0.0));
+  float sinT = (n0 / n1) * sinI;
+  if (sinT >= 1.0) return 1.0;            // total internal reflection
+  float cosT = sqrt(1.0 - sinT * sinT);
+
+  // Optical path difference → phase
+  float delta = 4.0 * 3.14159265 * n1 * d * cosT / lambda;
+
+  // Fresnel reflectance at one interface (Schlick)
+  float R0 = pow((n0 - n1) / (n0 + n1), 2.0);
+
+  // Airy summation
+  float num = 2.0 * R0 * (1.0 - cos(delta));
+  float den = 1.0 + R0 * R0 - 2.0 * R0 * cos(delta);
+  return clamp(num / max(den, 0.0001), 0.0, 1.0);
+}
+
+/* ── Main ── */
+
+void main() {
+  vec3 N = normalize(vNormal);
+  vec3 V = normalize(cameraPosition - vWorldPos);
+  float NdotV = max(dot(N, V), 0.001);
+
+  // ── Organic thickness variation (simulates natural aragonite platelet layout) ──
+  float nv  = fbm(vUv * 6.0 + uTime * 0.015);
+  float baseD = 400.0;  // nm — typical nacre platelet thickness
+  float varD  = 90.0 * nv
+              + 35.0 * sin(vUv.x * 22.0 + uTime * 0.10)
+              + 25.0 * cos(vUv.y * 17.0 - uTime * 0.08);
+
+  // ── Multi-layer thin-film iridescence ──
+  //    5 stacked aragonite layers × 10 spectral samples
+  vec3 iri = vec3(0.0);
+  for (int layer = 0; layer < 5; layer++) {
+    float d  = baseD + varD + float(layer) * 42.0;
+    vec3  lc = vec3(0.0);
+    for (int w = 0; w < 10; w++) {
+      float lam = 400.0 + float(w) * 33.33;  // 400 → 700 nm
+      lc += wavelengthToRGB(lam) * thinFilmR(lam, NdotV, d, 1.0, 1.58);
+    }
+    float attenuation = 1.0 - float(layer) * 0.10;
+    iri += lc * attenuation / 10.0;
+  }
+  iri /= 5.0;
+
+  // ── Warm nacre base ──
+  vec3 warmBase = mix(
+    vec3(0.97, 0.94, 0.91),
+    vec3(0.96, 0.90, 0.86),
+    fbm(vUv * 3.0 + 0.5)
+  );
+
+  // ── Fresnel rim ──
+  float fres = pow(1.0 - NdotV, 4.0);
+
+  // ── Three-point pearlescent specular ──
+  vec3 L1 = normalize(vec3( 3.0, 5.0,  4.0));
+  vec3 L2 = normalize(vec3(-4.0, 3.0, -2.0));
+  vec3 L3 = normalize(vec3( 1.0,-2.0,  5.0));
+  float s1 = pow(max(dot(N, normalize(V + L1)), 0.0), 128.0);
+  float s2 = pow(max(dot(N, normalize(V + L2)), 0.0),  64.0);
+  float s3 = pow(max(dot(N, normalize(V + L3)), 0.0),  96.0);
+
+  // ── Diffuse (half-lambert for soft wrap) ──
+  float diff = dot(N, L1) * 0.5 + 0.5;
+
+  // ── Sub-surface translucency ──
+  float trans = pow(max(dot(-N, L1), 0.0), 3.0) * 0.06;
+
+  // ── Compose ──
+  vec3 col = vec3(0.0);
+
+  // Diffuse base
+  col += warmBase * diff * 0.22;
+
+  // Iridescence (boosted at grazing angles, like real nacre)
+  col += iri * (0.55 + fres * 0.45) * 1.9;
+
+  // Specular
+  col += vec3(1.00, 0.98, 0.95) * s1 * 0.85;
+  col += vec3(0.95, 0.98, 1.00) * s2 * 0.35;
+  col += vec3(1.00, 0.95, 0.98) * s3 * 0.25;
+
+  // Rim glow
+  vec3 rim = mix(
+    vec3(0.85, 0.92, 1.0),
+    vec3(1.0, 0.90, 0.95),
+    sin(vUv.x * 8.0) * 0.5 + 0.5
+  );
+  col += rim * fres * 0.20;
+
+  // Translucency
+  col += vec3(1.0, 0.92, 0.87) * trans;
+
+  // Subtle shimmer
+  col += sin(vUv.x * 55.0 + uTime * 0.35)
+       * cos(vUv.y * 42.0 - uTime * 0.25)
+       * 0.008 * (1.0 - NdotV);
+
+  // ACES-ish tone mapping
+  col = (col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14);
+
+  // Gamma
+  col = pow(clamp(col, 0.0, 1.0), vec3(1.0 / 2.2));
+
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════════════════════════════
+// Three.js Scene
+// ═══════════════════════════════════════════════════════════════
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x000000);
+document.body.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100,
+);
+
+// Smooth torus-knot — the curvature variation shows off the iridescence
+const geometry = new THREE.TorusKnotGeometry(1, 0.38, 256, 64);
+const material = new THREE.ShaderMaterial({
+  vertexShader,
+  fragmentShader,
+  uniforms: {
+    uTime: { value: 0 },
+  },
+});
+
+const mesh = new THREE.Mesh(geometry, material);
+scene.add(mesh);
+
+// ═══════════════════════════════════════════════════════════════
+// Camera Orbit
+// ═══════════════════════════════════════════════════════════════
+
+const RADIUS = 3.8;
+const orbit  = { theta: 0, phi: Math.PI / 2 };
+const target = { theta: 0, phi: Math.PI / 2 };
+
+function syncCamera() {
+  camera.position.set(
+    RADIUS * Math.sin(orbit.phi) * Math.sin(orbit.theta),
+    RADIUS * Math.cos(orbit.phi),
+    RADIUS * Math.sin(orbit.phi) * Math.cos(orbit.theta),
+  );
+  camera.lookAt(0, 0, 0);
+}
+syncCamera();
+
+// ═══════════════════════════════════════════════════════════════
+// Input — Desktop Mouse
+// ═══════════════════════════════════════════════════════════════
+
+let useGyro = false;
+
+window.addEventListener('mousemove', (e) => {
+  if (useGyro) return;
+  target.theta = ((e.clientX / window.innerWidth)  - 0.5) * Math.PI * 1.2;
+  target.phi   = 0.4 + (e.clientY / window.innerHeight) * (Math.PI - 0.8);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Input — Mobile Gyroscope
+// ═══════════════════════════════════════════════════════════════
+
+let alphaOffset = null;
+
+function onDeviceOrientation(e) {
+  const alpha = e.alpha || 0;
+  const beta  = e.beta  || 0;
+  const gamma = e.gamma || 0;
+
+  if (alphaOffset === null) alphaOffset = alpha;
+
+  // beta  — phone tilt forward / back (90° = upright → φ = π/2)
+  target.phi = Math.PI / 2 + THREE.MathUtils.degToRad(beta - 90) * 0.7;
+  target.phi = THREE.MathUtils.clamp(target.phi, 0.3, Math.PI - 0.3);
+
+  // gamma — left / right tilt
+  // alpha — compass heading (relative to where user started)
+  const relAlpha = alpha - alphaOffset;
+  target.theta =
+    -THREE.MathUtils.degToRad(gamma)    * 1.5 +
+     THREE.MathUtils.degToRad(relAlpha) * 0.4;
+}
+
+function enableGyroscope() {
+  useGyro = true;
+  window.addEventListener('deviceorientation', onDeviceOrientation, true);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Start Button (required for iOS DeviceOrientationEvent permission)
+// ═══════════════════════════════════════════════════════════════
+
+const overlay  = document.getElementById('overlay');
+const startBtn = document.getElementById('start');
+
+startBtn.addEventListener('click', async () => {
+  if (
+    typeof DeviceOrientationEvent !== 'undefined' &&
+    typeof DeviceOrientationEvent.requestPermission === 'function'
+  ) {
+    try {
+      const perm = await DeviceOrientationEvent.requestPermission();
+      if (perm === 'granted') enableGyroscope();
+    } catch (err) {
+      console.warn('Gyroscope permission denied', err);
+    }
+  } else if (typeof DeviceOrientationEvent !== 'undefined') {
+    enableGyroscope();
+  }
+
+  overlay.classList.add('hidden');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Resize
+// ═══════════════════════════════════════════════════════════════
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Animation Loop
+// ═══════════════════════════════════════════════════════════════
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  material.uniforms.uTime.value = clock.getElapsedTime();
+
+  // Smooth lerp toward target orbit
+  orbit.theta += (target.theta - orbit.theta) * 0.06;
+  orbit.phi   += (target.phi   - orbit.phi)   * 0.06;
+  syncCamera();
+
+  // Gentle idle rotation so the nacre shimmers even without input
+  mesh.rotation.y += 0.0012;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
