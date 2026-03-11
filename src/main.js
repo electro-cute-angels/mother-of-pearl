@@ -264,6 +264,18 @@ const brassMat = new THREE.MeshStandardMaterial({
   roughness: 0.2,
 });
 
+const copperMat = new THREE.MeshStandardMaterial({
+  color: 0xb87333,
+  metalness: 0.85,
+  roughness: 0.3,
+});
+
+const rubberMat = new THREE.MeshStandardMaterial({
+  color: 0x1a1a1a,
+  metalness: 0.0,
+  roughness: 0.95,
+});
+
 // ═══════════════════════════════════════════════════════════════
 // Lighting for metal parts
 // ═══════════════════════════════════════════════════════════════
@@ -286,23 +298,69 @@ scene.add(dirLight2);
 function createHexBolt(radius, height) {
   const group = new THREE.Group();
 
-  // Hex head
-  const hexGeo = new THREE.CylinderGeometry(radius, radius, height * 0.35, 6);
+  // Hex head with chamfered edges
+  const hexGeo = new THREE.CylinderGeometry(radius, radius * 0.92, height * 0.35, 6);
   const hexMesh = new THREE.Mesh(hexGeo, brassMat);
   hexMesh.position.y = height * 0.175;
   group.add(hexMesh);
 
+  // Socket detail on top of hex head
+  const socketGeo = new THREE.CylinderGeometry(radius * 0.35, radius * 0.35, height * 0.12, 6);
+  const socket = new THREE.Mesh(socketGeo, darkMetal);
+  socket.position.y = height * 0.38;
+  group.add(socket);
+
   // Washer
-  const washerGeo = new THREE.CylinderGeometry(radius * 1.4, radius * 1.4, height * 0.08, 24);
+  const washerGeo = new THREE.TorusGeometry(radius * 1.1, radius * 0.25, 8, 24);
   const washer = new THREE.Mesh(washerGeo, metalMat);
-  washer.position.y = -height * 0.04;
+  washer.rotation.x = Math.PI / 2;
+  washer.position.y = -height * 0.02;
   group.add(washer);
 
-  // Shaft
+  // Lock washer (split ring)
+  const lockGeo = new THREE.TorusGeometry(radius * 0.8, radius * 0.12, 6, 20, Math.PI * 1.8);
+  const lockWasher = new THREE.Mesh(lockGeo, copperMat);
+  lockWasher.rotation.x = Math.PI / 2;
+  lockWasher.position.y = -height * 0.08;
+  group.add(lockWasher);
+
+  // Threaded shaft
   const shaftGeo = new THREE.CylinderGeometry(radius * 0.35, radius * 0.35, height * 0.6, 12);
   const shaft = new THREE.Mesh(shaftGeo, darkMetal);
   shaft.position.y = -height * 0.35;
   group.add(shaft);
+
+  return group;
+}
+
+function createBearingHousing(radius) {
+  const group = new THREE.Group();
+
+  // Outer housing
+  const outerGeo = new THREE.TorusGeometry(radius, radius * 0.3, 12, 24);
+  const outer = new THREE.Mesh(outerGeo, darkMetal);
+  outer.rotation.x = Math.PI / 2;
+  group.add(outer);
+
+  // Inner race
+  const innerGeo = new THREE.TorusGeometry(radius * 0.55, radius * 0.15, 8, 24);
+  const inner = new THREE.Mesh(innerGeo, metalMat);
+  inner.rotation.x = Math.PI / 2;
+  group.add(inner);
+
+  // Mounting flange (rectangular with holes)
+  const flangeGeo = new THREE.BoxGeometry(radius * 3.5, radius * 3.5, radius * 0.2);
+  const flange = new THREE.Mesh(flangeGeo, metalMat);
+  group.add(flange);
+
+  // Flange mounting holes (4 corners)
+  for (const [fx, fy] of [[-1,1],[1,1],[1,-1],[-1,-1]]) {
+    const holeGeo = new THREE.CylinderGeometry(radius * 0.2, radius * 0.2, radius * 0.25, 8);
+    const hole = new THREE.Mesh(holeGeo, darkMetal);
+    hole.rotation.x = Math.PI / 2;
+    hole.position.set(fx * radius * 1.3, fy * radius * 1.3, 0);
+    group.add(hole);
+  }
 
   return group;
 }
@@ -315,7 +373,47 @@ function createRod(length, radius) {
 
 function createNacrePanel(w, h, depth) {
   const geo = new THREE.BoxGeometry(w, h, depth, 4, 16, 4);
-  return new THREE.Mesh(geo, nacreMat);
+  const panel = new THREE.Mesh(geo, nacreMat);
+
+  // Metal trim frame around the panel edges
+  const trimR = 0.008;
+  const trimMat = metalMat;
+
+  // Horizontal trims (top and bottom)
+  for (const ySign of [-1, 1]) {
+    const tGeo = new THREE.CylinderGeometry(trimR, trimR, w + 0.02, 6);
+    tGeo.rotateZ(Math.PI / 2);
+    const trim = new THREE.Mesh(tGeo, trimMat);
+    trim.position.y = ySign * h / 2;
+    trim.position.z = depth / 2 + trimR;
+    panel.add(trim);
+  }
+
+  // Vertical trims (left and right)
+  for (const xSign of [-1, 1]) {
+    const tGeo = new THREE.CylinderGeometry(trimR, trimR, h + 0.02, 6);
+    const trim = new THREE.Mesh(tGeo, trimMat);
+    trim.position.x = xSign * w / 2;
+    trim.position.z = depth / 2 + trimR;
+    panel.add(trim);
+  }
+
+  // Small rivets along edges
+  const rivetGeo = new THREE.SphereGeometry(0.012, 6, 6);
+  const rivetCount = Math.floor(h / 0.1);
+  for (let side = -1; side <= 1; side += 2) {
+    for (let r = 0; r < rivetCount; r++) {
+      const rivet = new THREE.Mesh(rivetGeo, brassMat);
+      rivet.position.set(
+        side * (w / 2 - 0.005),
+        -h / 2 + (r + 0.5) * (h / rivetCount),
+        depth / 2 + 0.01
+      );
+      panel.add(rivet);
+    }
+  }
+
+  return panel;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -330,18 +428,50 @@ const PANEL_DEPTH = 0.06;
 const BOLT_R = 0.045;
 const BOLT_H = 0.12;
 
-// ── Base platform ──
-const baseGeo = new THREE.BoxGeometry(0.8, 0.08, 0.35, 1, 1, 1);
-const baseMesh = new THREE.Mesh(baseGeo, darkMetal);
-baseMesh.position.set(0, -1.8, 0);
-scene.add(baseMesh);
+// ── Base platform (heavier, more detailed) ──
+const baseGroup = new THREE.Group();
+baseGroup.position.set(0, -1.8, 0);
+scene.add(baseGroup);
 
-// Base feet
-for (const xOff of [-0.3, 0.3]) {
-  const footGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.06, 12);
-  const foot = new THREE.Mesh(footGeo, metalMat);
-  foot.position.set(xOff, -1.84, 0);
-  scene.add(foot);
+// Main platform
+const baseGeo = new THREE.BoxGeometry(1.0, 0.10, 0.40);
+const baseMesh = new THREE.Mesh(baseGeo, darkMetal);
+baseGroup.add(baseMesh);
+
+// Top plate
+const topPlateGeo = new THREE.BoxGeometry(0.5, 0.03, 0.30);
+const topPlate = new THREE.Mesh(topPlateGeo, metalMat);
+topPlate.position.y = 0.065;
+baseGroup.add(topPlate);
+
+// Counterweight block
+const cwGeo = new THREE.BoxGeometry(0.6, 0.08, 0.32);
+const counterweight = new THREE.Mesh(cwGeo, metalMat);
+counterweight.position.y = -0.09;
+baseGroup.add(counterweight);
+
+// Rubber feet
+for (const xOff of [-0.4, -0.15, 0.15, 0.4]) {
+  const footGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.04, 12);
+  const foot = new THREE.Mesh(footGeo, rubberMat);
+  foot.position.set(xOff, -0.13, 0);
+  baseGroup.add(foot);
+}
+
+// Side mounting brackets on base
+for (const xSign of [-1, 1]) {
+  const bracketGeo = new THREE.BoxGeometry(0.04, 0.10, 0.28);
+  const bracket = new THREE.Mesh(bracketGeo, metalMat);
+  bracket.position.set(xSign * 0.48, 0, 0);
+  baseGroup.add(bracket);
+
+  // Bracket bolts
+  for (const yOff of [-0.03, 0.03]) {
+    const b = createHexBolt(0.025, 0.06);
+    b.rotation.x = Math.PI / 2;
+    b.position.set(xSign * 0.48, yOff, 0.16);
+    baseGroup.add(b);
+  }
 }
 
 // ── Build segments ──
@@ -368,7 +498,7 @@ for (let i = 0; i < 3; i++) {
   pivot.add(panel);
 
   // Cross braces (small horizontal rods)
-  for (const yFrac of [0.25, 0.75]) {
+  for (const yFrac of [0.15, 0.5, 0.85]) {
     const braceGeo = new THREE.CylinderGeometry(ROD_R * 0.6, ROD_R * 0.6, rodOffset * 2, 8);
     braceGeo.rotateZ(Math.PI / 2);
     const brace = new THREE.Mesh(braceGeo, darkMetal);
@@ -376,17 +506,21 @@ for (let i = 0; i < 3; i++) {
     pivot.add(brace);
   }
 
-  // Bolt at this pivot point
-  const bolt = createHexBolt(BOLT_R, BOLT_H);
-  bolt.rotation.x = Math.PI / 2;
-  bolt.position.z = PANEL_DEPTH / 2 + 0.03;
-  pivot.add(bolt);
+  // Diagonal cross brace (X pattern)
+  const diagLen = Math.sqrt((rodOffset * 2) ** 2 + (h * 0.35) ** 2);
+  const diagAngle = Math.atan2(h * 0.35, rodOffset * 2);
+  for (const flip of [1, -1]) {
+    const dGeo = new THREE.CylinderGeometry(ROD_R * 0.35, ROD_R * 0.35, diagLen, 6);
+    const diag = new THREE.Mesh(dGeo, copperMat);
+    diag.position.y = h * 0.5;
+    diag.rotation.z = flip * diagAngle;
+    pivot.add(diag);
+  }
 
-  // Bolt on back side
-  const boltBack = createHexBolt(BOLT_R, BOLT_H);
-  boltBack.rotation.x = -Math.PI / 2;
-  boltBack.position.z = -(PANEL_DEPTH / 2 + 0.03);
-  pivot.add(boltBack);
+  // Bearing housing at pivot point
+  const bearing = createBearingHousing(0.055);
+  bearing.position.z = PANEL_DEPTH / 2 + 0.04;
+  pivot.add(bearing);
 
   if (i === 0) {
     pivot.position.set(0, -1.76, 0);
@@ -417,8 +551,9 @@ for (let i = 0; i < 3; i++) {
 // ═══════════════════════════════════════════════════════════════
 
 const G = 9.81;
-const DAMP = 0.35;   // angular damping coefficient
-const SUB_STEPS = 8; // integration sub-steps per frame
+const DAMP = 2.8;         // strong angular damping (viscous joint friction)
+const SPRING = 18.0;      // strong restoring spring at each joint (like a torsion bar)
+const SUB_STEPS = 12;     // integration sub-steps per frame for stability
 
 // ═══════════════════════════════════════════════════════════════
 // Tilt state — drives the shader uTilt uniform
@@ -503,46 +638,53 @@ function animate() {
   nacreMat.uniforms.uTilt.value.set(tilt.x, tilt.y);
 
   // ── Coupled triple inverted pendulum physics ──
-  // External torque from tilt (simulates tilting the base platform)
-  const baseTorque = tilt.x * 25.0;
+  // The pendulum is stabilized by torsion springs at each joint.
+  // Tilting the phone/mouse shifts the effective gravity direction,
+  // which the pendulum responds to — like balancing a rod on a moving platform.
+  const baseTilt = tilt.x * 2.5;  // effective tilt angle of the base
 
   const subDt = dt / SUB_STEPS;
   for (let step = 0; step < SUB_STEPS; step++) {
-    // Compute angular accelerations using simplified Lagrangian coupling
     const a = [];
     for (let i = 0; i < 3; i++) {
       const seg = segments[i];
       const l = seg.length;
       const m = seg.mass;
 
-      // Effective gravity torque (inverted → positive = unstable)
-      let torque = m * G * (l / 2) * Math.sin(seg.angle);
-
-      // Coupling: upper segments exert torque on lower ones
-      // Lower segments transfer base excitation upward
-      for (let j = i + 1; j < 3; j++) {
-        const upper = segments[j];
-        torque += upper.mass * G * l * Math.sin(seg.angle);
-        // Inertial coupling
-        torque += upper.mass * l * (upper.length / 2) *
-                  upper.angVel * upper.angVel * Math.sin(upper.angle - seg.angle) * 0.3;
-      }
-
-      // Base torque drives primarily the first link, cascades up
-      const excitation = (i === 0) ? baseTorque : segments[i - 1].angVel * segments[i - 1].length * m * 2.0;
-
       // Moment of inertia (uniform rod about end)
       const I = (m * l * l) / 3.0;
 
-      const angAccel = (torque + excitation - DAMP * seg.angVel * l) / I;
-      a.push(angAccel);
+      // Gravity torque (destabilising — inverted pendulum)
+      // The effective gravity direction is shifted by the base tilt
+      const effectiveAngle = seg.angle - baseTilt;
+      let torque = m * G * (l / 2) * Math.sin(effectiveAngle);
+
+      // Weight of all segments above this one
+      for (let j = i + 1; j < 3; j++) {
+        torque += segments[j].mass * G * l * Math.sin(effectiveAngle);
+      }
+
+      // Torsion spring restoring torque (pulls toward upright relative to parent)
+      const springTorque = -SPRING * seg.angle;
+
+      // Coupling: inertial reaction from upper segment motion
+      if (i < 2) {
+        const upper = segments[i + 1];
+        torque += upper.mass * l * (upper.length / 2) *
+                  upper.angVel * upper.angVel * Math.sin(upper.angle - seg.angle) * 0.4;
+      }
+
+      // Viscous damping (joint friction)
+      const dampTorque = -DAMP * seg.angVel * l;
+
+      a.push((torque + springTorque + dampTorque) / I);
     }
 
-    // Semi-implicit Euler integration
+    // Semi-implicit Euler
     for (let i = 0; i < 3; i++) {
       segments[i].angVel += a[i] * subDt;
       segments[i].angle  += segments[i].angVel * subDt;
-      segments[i].angle   = THREE.MathUtils.clamp(segments[i].angle, -1.2, 1.2);
+      segments[i].angle   = THREE.MathUtils.clamp(segments[i].angle, -0.8, 0.8);
     }
   }
 
