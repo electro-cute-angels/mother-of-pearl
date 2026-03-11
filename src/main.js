@@ -30,6 +30,7 @@ varying vec3 vWorldPos;
 varying vec2 vUv;
 
 uniform float uTime;
+uniform vec2  uTilt;   // x = left/right, y = forward/back — from gyroscope or mouse
 
 /* ── Procedural noise (gradient-value hybrid) ── */
 
@@ -101,10 +102,24 @@ float thinFilmR(float lambda, float cosI, float d, float n0, float n1) {
   return clamp(num / max(den, 0.0001), 0.0, 1.0);
 }
 
+/* ── Rotate a vector around an axis (Rodrigues) ── */
+
+vec3 rotateAxis(vec3 v, vec3 axis, float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+}
+
 /* ── Main ── */
 
 void main() {
   vec3 N = normalize(vNormal);
+
+  // Tilt the normal as if rotating the shell in your hand
+  N = rotateAxis(N, vec3(1.0, 0.0, 0.0), uTilt.y);  // tilt forward/back
+  N = rotateAxis(N, vec3(0.0, 1.0, 0.0), uTilt.x);  // tilt left/right
+  N = normalize(N);
+
   vec3 V = normalize(cameraPosition - vWorldPos);
   float NdotV = max(dot(N, V), 0.001);
 
@@ -213,73 +228,46 @@ const camera = new THREE.PerspectiveCamera(
   100,
 );
 
-// Large plane — focus is entirely on the material surface
-const geometry = new THREE.PlaneGeometry(5, 5, 1, 1);
+// Fill the viewport with a plane — all magic is in the material
+const geometry = new THREE.PlaneGeometry(6, 6, 1, 1);
 const material = new THREE.ShaderMaterial({
   vertexShader,
   fragmentShader,
   uniforms: {
     uTime: { value: 0 },
+    uTilt: { value: new THREE.Vector2(0, 0) },
   },
 });
 
 const mesh = new THREE.Mesh(geometry, material);
-mesh.rotation.x = -Math.PI * 0.15; // tilt slightly toward camera
 scene.add(mesh);
 
-// ═══════════════════════════════════════════════════════════════
-// Camera Orbit
-// ═══════════════════════════════════════════════════════════════
-
-const RADIUS = 3.2;
-const orbit  = { theta: 0, phi: Math.PI * 0.38 };
-const target = { theta: 0, phi: Math.PI * 0.38 };
-
-function syncCamera() {
-  camera.position.set(
-    RADIUS * Math.sin(orbit.phi) * Math.sin(orbit.theta),
-    RADIUS * Math.cos(orbit.phi),
-    RADIUS * Math.sin(orbit.phi) * Math.cos(orbit.theta),
-  );
-  camera.lookAt(0, 0, 0);
-}
-syncCamera();
+// Fixed camera looking straight at the plane
+camera.position.set(0, 0, 3.2);
+camera.lookAt(0, 0, 0);
 
 // ═══════════════════════════════════════════════════════════════
-// Input — Desktop Mouse
+// Tilt state — drives the shader uTilt uniform
 // ═══════════════════════════════════════════════════════════════
 
+const tilt   = { x: 0, y: 0 };
+const tiltTarget = { x: 0, y: 0 };
 let useGyro = false;
 
+// ── Desktop: mouse position → tilt ──
 window.addEventListener('mousemove', (e) => {
   if (useGyro) return;
-  target.theta = ((e.clientX / window.innerWidth)  - 0.5) * Math.PI * 0.6;
-  target.phi   = 0.25 + (e.clientY / window.innerHeight) * (Math.PI * 0.5);
+  tiltTarget.x = ((e.clientX / window.innerWidth)  - 0.5) * 1.4;  // left/right
+  tiltTarget.y = ((e.clientY / window.innerHeight) - 0.5) * 1.0;  // forward/back
 });
 
-// ═══════════════════════════════════════════════════════════════
-// Input — Mobile Gyroscope
-// ═══════════════════════════════════════════════════════════════
-
-let alphaOffset = null;
-
+// ── Mobile: gyroscope → tilt ──
 function onDeviceOrientation(e) {
-  const alpha = e.alpha || 0;
-  const beta  = e.beta  || 0;
-  const gamma = e.gamma || 0;
+  const beta  = e.beta  || 0;   // forward / back tilt
+  const gamma = e.gamma || 0;   // left / right tilt
 
-  if (alphaOffset === null) alphaOffset = alpha;
-
-  // beta  — phone tilt forward / back (90° = upright → φ = π/2)
-  target.phi = Math.PI / 2 + THREE.MathUtils.degToRad(beta - 90) * 0.7;
-  target.phi = THREE.MathUtils.clamp(target.phi, 0.3, Math.PI - 0.3);
-
-  // gamma — left / right tilt
-  // alpha — compass heading (relative to where user started)
-  const relAlpha = alpha - alphaOffset;
-  target.theta =
-    -THREE.MathUtils.degToRad(gamma)    * 1.5 +
-     THREE.MathUtils.degToRad(relAlpha) * 0.4;
+  tiltTarget.x = THREE.MathUtils.degToRad(gamma) * 1.2;
+  tiltTarget.y = THREE.MathUtils.degToRad(beta - 90) * 0.8;
 }
 
 function enableGyroscope() {
@@ -333,10 +321,10 @@ function animate() {
 
   material.uniforms.uTime.value = clock.getElapsedTime();
 
-  // Smooth lerp toward target orbit
-  orbit.theta += (target.theta - orbit.theta) * 0.06;
-  orbit.phi   += (target.phi   - orbit.phi)   * 0.06;
-  syncCamera();
+  // Smooth lerp toward target tilt
+  tilt.x += (tiltTarget.x - tilt.x) * 0.08;
+  tilt.y += (tiltTarget.y - tilt.y) * 0.08;
+  material.uniforms.uTilt.value.set(tilt.x, tilt.y);
 
   renderer.render(scene, camera);
 }
