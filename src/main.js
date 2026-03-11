@@ -551,9 +551,25 @@ for (let i = 0; i < 3; i++) {
 // ═══════════════════════════════════════════════════════════════
 
 const G = 9.81;
-const DAMP = 2.8;         // strong angular damping (viscous joint friction)
-const SPRING = 18.0;      // strong restoring spring at each joint (like a torsion bar)
-const SUB_STEPS = 12;     // integration sub-steps per frame for stability
+const DAMP = 4.5;         // viscous joint friction
+const SUB_STEPS = 16;     // integration sub-steps per frame for stability
+
+// Per-joint spring stiffness: must exceed total gravitational torque
+// to allow a stable upright equilibrium.
+// For joint i: total_load = (m_i * L_i/2 + sum_above(m_j * L_i)) * g
+// Spring must be ~1.5× that for a stable but responsive feel.
+const SPRING_MARGIN = 1.5;
+const jointSprings = [];
+for (let i = 0; i < 3; i++) {
+  const l = ARM_LENGTHS[i];
+  const m = ARM_MASSES[i];
+  let loadTorque = m * G * (l / 2);  // own weight
+  for (let j = i + 1; j < 3; j++) {
+    loadTorque += ARM_MASSES[j] * G * l; // weight of everything above
+  }
+  jointSprings.push(loadTorque * SPRING_MARGIN);
+}
+// jointSprings ≈ [114, 44, 6] — bottom joint is stiffest
 
 // ═══════════════════════════════════════════════════════════════
 // Tilt state — drives the shader uTilt uniform
@@ -638,10 +654,11 @@ function animate() {
   nacreMat.uniforms.uTilt.value.set(tilt.x, tilt.y);
 
   // ── Coupled triple inverted pendulum physics ──
-  // The pendulum is stabilized by torsion springs at each joint.
-  // Tilting the phone/mouse shifts the effective gravity direction,
-  // which the pendulum responds to — like balancing a rod on a moving platform.
-  const baseTilt = tilt.x * 2.5;  // effective tilt angle of the base
+  // Each joint has a torsion spring strong enough to hold the pendulum upright.
+  // Tilting the phone/mouse shifts the effective gravity vector,
+  // so the equilibrium point shifts — tilt right → pendulum leans right.
+  // Hold the phone level → pendulum finds vertical.
+  const baseTilt = tilt.x * 1.8;
 
   const subDt = dt / SUB_STEPS;
   for (let step = 0; step < SUB_STEPS; step++) {
@@ -655,26 +672,27 @@ function animate() {
       const I = (m * l * l) / 3.0;
 
       // Gravity torque (destabilising — inverted pendulum)
-      // The effective gravity direction is shifted by the base tilt
+      // Effective gravity is tilted by baseTilt
       const effectiveAngle = seg.angle - baseTilt;
       let torque = m * G * (l / 2) * Math.sin(effectiveAngle);
 
-      // Weight of all segments above this one
+      // Weight of all segments above
       for (let j = i + 1; j < 3; j++) {
         torque += segments[j].mass * G * l * Math.sin(effectiveAngle);
       }
 
-      // Torsion spring restoring torque (pulls toward upright relative to parent)
-      const springTorque = -SPRING * seg.angle;
+      // Torsion spring — pulls toward upright (angle = 0)
+      // Scaled per joint so that the equilibrium is stable
+      const springTorque = -jointSprings[i] * seg.angle;
 
-      // Coupling: inertial reaction from upper segment motion
+      // Coupling: inertial reaction from upper segment
       if (i < 2) {
         const upper = segments[i + 1];
         torque += upper.mass * l * (upper.length / 2) *
                   upper.angVel * upper.angVel * Math.sin(upper.angle - seg.angle) * 0.4;
       }
 
-      // Viscous damping (joint friction)
+      // Viscous damping
       const dampTorque = -DAMP * seg.angVel * l;
 
       a.push((torque + springTorque + dampTorque) / I);
@@ -684,7 +702,7 @@ function animate() {
     for (let i = 0; i < 3; i++) {
       segments[i].angVel += a[i] * subDt;
       segments[i].angle  += segments[i].angVel * subDt;
-      segments[i].angle   = THREE.MathUtils.clamp(segments[i].angle, -0.8, 0.8);
+      segments[i].angle   = THREE.MathUtils.clamp(segments[i].angle, -0.9, 0.9);
     }
   }
 
