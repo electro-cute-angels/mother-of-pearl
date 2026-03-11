@@ -229,18 +229,14 @@ const camera = new THREE.PerspectiveCamera(
 );
 
 // Fixed camera — pulled back to see the full pendulum
-camera.position.set(0, 0, 5.5);
-camera.lookAt(0, 0, 0);
+camera.position.set(0, 0, 6.0);
+camera.lookAt(0, 0.3, 0);
 
 // ═══════════════════════════════════════════════════════════════
-// Triple inverted pendulum with nacre shader
+// Materials
 // ═══════════════════════════════════════════════════════════════
 
-const SEG_W = 0.30;
-const SEG_LENGTHS = [1.2, 1.0, 0.8]; // bottom, middle, top
-const SEG_DEPTH   = 0.12;
-
-const material = new THREE.ShaderMaterial({
+const nacreMat = new THREE.ShaderMaterial({
   vertexShader,
   fragmentShader,
   uniforms: {
@@ -250,57 +246,179 @@ const material = new THREE.ShaderMaterial({
   side: THREE.DoubleSide,
 });
 
-// Each segment: pivot at bottom-center, geometry extends upward
-const segments = [];  // { pivot, angle, angVel }
-let parentGroup = scene;
+const metalMat = new THREE.MeshStandardMaterial({
+  color: 0x888888,
+  metalness: 0.85,
+  roughness: 0.25,
+});
+
+const darkMetal = new THREE.MeshStandardMaterial({
+  color: 0x444444,
+  metalness: 0.9,
+  roughness: 0.3,
+});
+
+const brassMat = new THREE.MeshStandardMaterial({
+  color: 0xb5a642,
+  metalness: 0.9,
+  roughness: 0.2,
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Lighting for metal parts
+// ═══════════════════════════════════════════════════════════════
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+scene.add(ambientLight);
+
+const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight1.position.set(3, 5, 4);
+scene.add(dirLight1);
+
+const dirLight2 = new THREE.DirectionalLight(0x8899bb, 0.4);
+dirLight2.position.set(-4, 3, -2);
+scene.add(dirLight2);
+
+// ═══════════════════════════════════════════════════════════════
+// Geometry helpers
+// ═══════════════════════════════════════════════════════════════
+
+function createHexBolt(radius, height) {
+  const group = new THREE.Group();
+
+  // Hex head
+  const hexGeo = new THREE.CylinderGeometry(radius, radius, height * 0.35, 6);
+  const hexMesh = new THREE.Mesh(hexGeo, brassMat);
+  hexMesh.position.y = height * 0.175;
+  group.add(hexMesh);
+
+  // Washer
+  const washerGeo = new THREE.CylinderGeometry(radius * 1.4, radius * 1.4, height * 0.08, 24);
+  const washer = new THREE.Mesh(washerGeo, metalMat);
+  washer.position.y = -height * 0.04;
+  group.add(washer);
+
+  // Shaft
+  const shaftGeo = new THREE.CylinderGeometry(radius * 0.35, radius * 0.35, height * 0.6, 12);
+  const shaft = new THREE.Mesh(shaftGeo, darkMetal);
+  shaft.position.y = -height * 0.35;
+  group.add(shaft);
+
+  return group;
+}
+
+function createRod(length, radius) {
+  const geo = new THREE.CylinderGeometry(radius, radius, length, 16);
+  geo.translate(0, length / 2, 0);
+  return new THREE.Mesh(geo, metalMat);
+}
+
+function createNacrePanel(w, h, depth) {
+  const geo = new THREE.BoxGeometry(w, h, depth, 4, 16, 4);
+  return new THREE.Mesh(geo, nacreMat);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Triple inverted pendulum — mechanical build
+// ═══════════════════════════════════════════════════════════════
+
+const ARM_LENGTHS = [1.3, 1.05, 0.8];
+const ARM_MASSES  = [3.0, 2.0, 1.0];   // mass ratio bottom → top
+const ROD_R = 0.025;
+const PANEL_W = 0.22;
+const PANEL_DEPTH = 0.06;
+const BOLT_R = 0.045;
+const BOLT_H = 0.12;
+
+// ── Base platform ──
+const baseGeo = new THREE.BoxGeometry(0.8, 0.08, 0.35, 1, 1, 1);
+const baseMesh = new THREE.Mesh(baseGeo, darkMetal);
+baseMesh.position.set(0, -1.8, 0);
+scene.add(baseMesh);
+
+// Base feet
+for (const xOff of [-0.3, 0.3]) {
+  const footGeo = new THREE.CylinderGeometry(0.05, 0.06, 0.06, 12);
+  const foot = new THREE.Mesh(footGeo, metalMat);
+  foot.position.set(xOff, -1.84, 0);
+  scene.add(foot);
+}
+
+// ── Build segments ──
+const segments = [];
 
 for (let i = 0; i < 3; i++) {
-  const h = SEG_LENGTHS[i];
-  const geo = new THREE.BoxGeometry(SEG_W, h, SEG_DEPTH, 4, 16, 4);
-  geo.translate(0, h / 2, 0);  // pivot at bottom
-
-  const mesh = new THREE.Mesh(geo, material);
-
+  const h = ARM_LENGTHS[i];
   const pivot = new THREE.Group();
-  pivot.add(mesh);
 
-  if (i === 0) {
-    // Base of pendulum at bottom of screen
-    pivot.position.set(0, -1.4, 0);
-    scene.add(pivot);
-  } else {
-    // Attach at the top of the previous segment
-    pivot.position.set(0, SEG_LENGTHS[i - 1], 0);
-    segments[i - 1].pivot.children[0].add(pivot);
+  // Two parallel rods
+  const rodOffset = 0.06;
+  const rodL = createRod(h, ROD_R);
+  rodL.position.x = -rodOffset;
+  pivot.add(rodL);
+
+  const rodR = createRod(h, ROD_R);
+  rodR.position.x = rodOffset;
+  pivot.add(rodR);
+
+  // Nacre panel attached between the rods
+  const panelH = h * 0.65;
+  const panel = createNacrePanel(PANEL_W, panelH, PANEL_DEPTH);
+  panel.position.y = h * 0.45;
+  pivot.add(panel);
+
+  // Cross braces (small horizontal rods)
+  for (const yFrac of [0.25, 0.75]) {
+    const braceGeo = new THREE.CylinderGeometry(ROD_R * 0.6, ROD_R * 0.6, rodOffset * 2, 8);
+    braceGeo.rotateZ(Math.PI / 2);
+    const brace = new THREE.Mesh(braceGeo, darkMetal);
+    brace.position.y = h * yFrac;
+    pivot.add(brace);
   }
 
-  segments.push({ pivot, angle: 0, angVel: 0, length: h });
-  parentGroup = pivot;
-}
+  // Bolt at this pivot point
+  const bolt = createHexBolt(BOLT_R, BOLT_H);
+  bolt.rotation.x = Math.PI / 2;
+  bolt.position.z = PANEL_DEPTH / 2 + 0.03;
+  pivot.add(bolt);
 
-// ── Add a small sphere at each joint (the "screw") ──
-const jointGeo = new THREE.SphereGeometry(0.06, 16, 16);
-const jointMat = new THREE.MeshBasicMaterial({ color: 0x333333 });
+  // Bolt on back side
+  const boltBack = createHexBolt(BOLT_R, BOLT_H);
+  boltBack.rotation.x = -Math.PI / 2;
+  boltBack.position.z = -(PANEL_DEPTH / 2 + 0.03);
+  pivot.add(boltBack);
 
-// Base joint
-const baseJoint = new THREE.Mesh(jointGeo, jointMat);
-baseJoint.position.set(0, -1.4, 0);
-scene.add(baseJoint);
+  if (i === 0) {
+    pivot.position.set(0, -1.76, 0);
+    scene.add(pivot);
+  } else {
+    pivot.position.set(0, ARM_LENGTHS[i - 1], 0);
+    // Attach to the previous pivot group
+    segments[i - 1].pivot.add(pivot);
+  }
 
-// Joints between segments
-for (let i = 0; i < 2; i++) {
-  const joint = new THREE.Mesh(jointGeo, jointMat);
-  joint.position.set(0, SEG_LENGTHS[i], 0);
-  segments[i].pivot.children[0].add(joint);
+  // Top bolt (where next segment connects, or a cap on the last one)
+  const topBolt = createHexBolt(BOLT_R * (i === 2 ? 0.7 : 1.0), BOLT_H * 0.8);
+  topBolt.rotation.x = Math.PI / 2;
+  topBolt.position.set(0, h, PANEL_DEPTH / 2 + 0.03);
+  pivot.add(topBolt);
+
+  segments.push({
+    pivot,
+    angle: 0,
+    angVel: 0,
+    length: h,
+    mass: ARM_MASSES[i],
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Pendulum physics
+// Lagrangian-derived coupled pendulum physics
 // ═══════════════════════════════════════════════════════════════
 
-const GRAVITY   = 4.0;
-const DAMPING   = 0.985;
-const STIFFNESS = 2.5;  // restoring spring toward upright
+const G = 9.81;
+const DAMP = 0.35;   // angular damping coefficient
+const SUB_STEPS = 8; // integration sub-steps per frame
 
 // ═══════════════════════════════════════════════════════════════
 // Tilt state — drives the shader uTilt uniform
@@ -375,34 +493,62 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
 
-  const dt = Math.min(clock.getDelta(), 0.05); // cap large spikes
+  const dt = Math.min(clock.getDelta(), 0.05);
   const t  = clock.elapsedTime;
-  material.uniforms.uTime.value = t;
+  nacreMat.uniforms.uTime.value = t;
 
   // Smooth lerp toward target tilt
   tilt.x += (tiltTarget.x - tilt.x) * 0.08;
   tilt.y += (tiltTarget.y - tilt.y) * 0.08;
-  material.uniforms.uTilt.value.set(tilt.x, tilt.y);
+  nacreMat.uniforms.uTilt.value.set(tilt.x, tilt.y);
 
-  // ── Pendulum physics (simple Euler per segment) ──
-  // Tilt acts as an external force (like tilting the base)
-  const force = tilt.x * 3.0;
+  // ── Coupled triple inverted pendulum physics ──
+  // External torque from tilt (simulates tilting the base platform)
+  const baseTorque = tilt.x * 25.0;
 
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    // Cascade: each segment feels more instability from segments below
-    const cascade = (i + 1) * 1.5;
-    const accel =
-      -GRAVITY * Math.sin(seg.angle) * cascade +  // gravity
-      -STIFFNESS * seg.angle +                     // restoring spring
-       force * cascade * 0.35;                     // gyroscope / mouse
+  const subDt = dt / SUB_STEPS;
+  for (let step = 0; step < SUB_STEPS; step++) {
+    // Compute angular accelerations using simplified Lagrangian coupling
+    const a = [];
+    for (let i = 0; i < 3; i++) {
+      const seg = segments[i];
+      const l = seg.length;
+      const m = seg.mass;
 
-    seg.angVel += accel * dt;
-    seg.angVel *= DAMPING;
-    seg.angle  += seg.angVel * dt;
-    seg.angle   = THREE.MathUtils.clamp(seg.angle, -0.7, 0.7);
+      // Effective gravity torque (inverted → positive = unstable)
+      let torque = m * G * (l / 2) * Math.sin(seg.angle);
 
-    seg.pivot.rotation.z = seg.angle;
+      // Coupling: upper segments exert torque on lower ones
+      // Lower segments transfer base excitation upward
+      for (let j = i + 1; j < 3; j++) {
+        const upper = segments[j];
+        torque += upper.mass * G * l * Math.sin(seg.angle);
+        // Inertial coupling
+        torque += upper.mass * l * (upper.length / 2) *
+                  upper.angVel * upper.angVel * Math.sin(upper.angle - seg.angle) * 0.3;
+      }
+
+      // Base torque drives primarily the first link, cascades up
+      const excitation = (i === 0) ? baseTorque : segments[i - 1].angVel * segments[i - 1].length * m * 2.0;
+
+      // Moment of inertia (uniform rod about end)
+      const I = (m * l * l) / 3.0;
+
+      const angAccel = (torque + excitation - DAMP * seg.angVel * l) / I;
+      a.push(angAccel);
+    }
+
+    // Semi-implicit Euler integration
+    for (let i = 0; i < 3; i++) {
+      segments[i].angVel += a[i] * subDt;
+      segments[i].angle  += segments[i].angVel * subDt;
+      segments[i].angle   = THREE.MathUtils.clamp(segments[i].angle, -1.2, 1.2);
+    }
+  }
+
+  // Apply angles to pivots
+  for (let i = 0; i < 3; i++) {
+    segments[i].pivot.rotation.z = segments[i].angle;
   }
 
   renderer.render(scene, camera);
